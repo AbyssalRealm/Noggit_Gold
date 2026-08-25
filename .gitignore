@@ -1,0 +1,7 @@
+
+/out
+/bin
+/build
+/.vs
+/CMakePresets.json
+/CMakeUserPresets.json
