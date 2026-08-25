@@ -1,3 +1,5 @@
+![Noggit Gold Studio](media/splash.png)
+
 # Noggit_Gold
 
 **Noggit_Gold** is a WotLK 3.3.5 map-authoring continuation built from the merged Noggit Red production source, with selected useful behavior adapted from earlier Noggit branches while preserving Red/Gold's newer architecture.
