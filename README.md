@@ -24,8 +24,10 @@ This repository is being opened for **public testing**. The goal is not to claim
 - Auto Texture terrain-aware elevation/slope distribution.
 - Auto Texture cliff texturing on steep terrain.
 - Auto Texture undo/redo as one normal ActionManager transaction.
+- Auto Texture PASS1B selected-terrain Min / Max / Span feedback and Fit Heights workflow.
+- Auto Texture Base / Low Ground / High Ground / Cliff slot selection through the existing Texture Browser.
 
-### Current public-test candidate
+### Current public-test focus
 
 The current source includes **Auto Texture PASS1B** UI/feedback work:
 
@@ -37,7 +39,7 @@ The current source includes **Auto Texture PASS1B** UI/feedback work:
 - clicking a texture preview/name opens the existing Noggit Texture Browser for that slot;
 - `Use Current` remains available as a shortcut.
 
-The PASS1B texture-picker portion is intentionally being released as a **test candidate** until broader user testing confirms it across different workflows.
+The four-slot Texture Browser selection path has been **live-tested successfully**. Public testing should now concentrate on adjacent-ADT seams, wider 3–8 ADT use, save/reload and in-game appearance, Light DBC write persistence, and general regression across different machines and maps.
 
 ## Important Auto Texture Safety Boundary
 
