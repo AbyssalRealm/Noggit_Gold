@@ -41,6 +41,7 @@ namespace Noggit
         eCHUNKS_LAYERINFO         = 0x4000, // ground effect id and texture flags
         eAREA_TRIGGER_TRANSFORMED = 0x8000,
         eCHUNKS_SOUND_EMITTERS    = 0x10000,
+        eLIVE_AUTOTEXTURE_ELIGIBLE = 0x20000, // Gold: normal terrain brush may trigger Live Auto Texture before action finish
     };
 
     enum ActionModalityControllers
@@ -128,6 +129,7 @@ namespace Noggit
         void tagAdress(std::uintptr_t address);
 
         float* getChunkTerrainOriginalData(MapChunk* chunk);
+        std::vector<MapChunk*> getChangedTerrainChunks() const;
 
         // Registrators
         void registerChunkTerrainChange(MapChunk* chunk);

@@ -59,6 +59,7 @@ namespace Noggit
       void purged();
       void currentActionChanged(unsigned index);
       void onActionBegin(Action* action);
+      void onActionAboutToFinish(Action* action);
       void onActionEnd(Action* action);
 
 

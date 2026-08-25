@@ -603,6 +603,15 @@ void Noggit::Action::finish()
       _post();
 }
 
+std::vector<MapChunk*> Noggit::Action::getChangedTerrainChunks() const
+{
+  std::vector<MapChunk*> chunks;
+  chunks.reserve(_chunk_terrain_pre.size());
+  for (auto const& pair : _chunk_terrain_pre)
+    chunks.push_back(pair.first);
+  return chunks;
+}
+
 float* Noggit::Action::getChunkTerrainOriginalData(MapChunk* chunk)
 {
   for (auto& pair : _chunk_terrain_pre)

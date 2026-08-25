@@ -12,6 +12,7 @@
 #include <noggit/texture_set.hpp>
 #include <noggit/ui/CurrentTexture.h>
 
+#include <QCheckBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
@@ -382,6 +383,18 @@ namespace Noggit::Ui::Tools
     _apply_button->setMinimumHeight(34);
     root->addWidget(_apply_button);
 
+    auto* live_auto_group = new QGroupBox("Live Auto Texture", this);
+    auto* live_auto_layout = new QVBoxLayout(live_auto_group);
+    _live_auto_checkbox = new QCheckBox("Reapply after terrain edits", live_auto_group);
+    _live_auto_checkbox->setToolTip(
+      "After an eligible Raise/Lower, Flatten, Blur, or terrain-mask sculpt finishes, "
+      "re-evaluate Auto Texture on the changed chunks plus one loaded selected neighbor ring.");
+    _live_auto_status = new QLabel("Live Auto: OFF", live_auto_group);
+    _live_auto_status->setWordWrap(true);
+    live_auto_layout->addWidget(_live_auto_checkbox);
+    live_auto_layout->addWidget(_live_auto_status);
+    root->addWidget(live_auto_group);
+
     connect(add_current, &QPushButton::clicked, this, [this]()
     {
       TileIndex const current(_map_view->getCamera()->position);
@@ -398,6 +411,31 @@ namespace Noggit::Ui::Tools
     connect(clear_selection, &QPushButton::clicked, this, [this]() { clear_adts(); });
     connect(fit_heights, &QPushButton::clicked, this, [this]() { fit_height_ranges(); });
     connect(_apply_button, &QPushButton::clicked, this, [this]() { apply_auto_texture(); });
+
+    connect(_live_auto_checkbox, &QCheckBox::toggled, this, [this](bool enabled)
+    {
+      if (!enabled)
+      {
+        _live_auto_status->setText("Live Auto: OFF");
+        _live_auto_status->setStyleSheet(QString());
+        return;
+      }
+
+      std::string reason;
+      if (!live_auto_configuration_valid(reason))
+      {
+        _live_auto_checkbox->setChecked(false);
+        _live_auto_status->setText(QString("Live Auto not enabled: %1").arg(QString::fromStdString(reason)));
+        _live_auto_status->setStyleSheet("QLabel { color : orange; }");
+        return;
+      }
+
+      _live_auto_status->setText("Live Auto: ON — waiting for an eligible terrain edit.");
+      _live_auto_status->setStyleSheet(QString());
+    });
+
+    connect(NOGGIT_ACTION_MGR, &Noggit::ActionManager::onActionAboutToFinish, this,
+      [this](Noggit::Action* action) { apply_live_auto(action); });
 
     for (auto* spin : {_low_full, _low_fade_end, _high_fade_start, _high_full})
     {
@@ -711,6 +749,268 @@ namespace Noggit::Ui::Tools
     update_height_feedback();
   }
 
+  bool AutoTextureWidget::live_auto_configuration_valid(std::string& reason) const
+  {
+    if (_selected_adts.empty())
+    {
+      reason = "select at least one ADT first";
+      return false;
+    }
+
+    std::set<std::string> unique_textures;
+    for (TextureSlot const& slot : _texture_slots)
+    {
+      if (slot.filename.empty())
+      {
+        reason = "assign Base, Low Ground, High Ground, and Cliff textures first";
+        return false;
+      }
+      unique_textures.insert(slot.filename);
+    }
+
+    if (unique_textures.size() != 4)
+    {
+      reason = "the four Auto Texture slots must use distinct texture files";
+      return false;
+    }
+
+    if (!(_low_full->value() < _low_fade_end->value()))
+    {
+      reason = "Low Full must be below Low Fade End";
+      return false;
+    }
+    if (!(_high_fade_start->value() < _high_full->value()))
+    {
+      reason = "High Fade Start must be below High Full";
+      return false;
+    }
+    if (!(_cliff_start->value() < _cliff_full->value()))
+    {
+      reason = "Cliff Start must be below Cliff Full";
+      return false;
+    }
+
+    reason.clear();
+    return true;
+  }
+
+  bool AutoTextureWidget::is_selected_adt(TileIndex const& index) const
+  {
+    return std::find(_selected_adts.begin(), _selected_adts.end(), index) != _selected_adts.end();
+  }
+
+  bool AutoTextureWidget::apply_auto_texture_to_chunk(MapChunk* chunk, Noggit::Action* action)
+  {
+    if (!chunk || !action || !chunk->getTextureSet())
+      return false;
+
+    auto* world = _map_view->getWorld();
+    action->registerChunkTextureChange(chunk);
+
+    TextureSet* texture_set = chunk->getTextureSet();
+    texture_set->eraseTextures();
+    for (TextureSlot const& slot : _texture_slots)
+    {
+      texture_set->addTexture(scoped_blp_texture_reference(slot.filename, world->getRenderContext()));
+    }
+
+    texture_set->create_temporary_alphamaps_if_needed();
+    auto& temp_ptr = texture_set->getTempAlphamaps();
+    if (!temp_ptr)
+      return false;
+
+    ChunkTerrainSampler const sampler(chunk);
+    tmp_edit_alpha_values& alpha = *temp_ptr;
+
+    float const low_full = static_cast<float>(_low_full->value());
+    float const low_fade_end = static_cast<float>(_low_fade_end->value());
+    float const high_fade_start = static_cast<float>(_high_fade_start->value());
+    float const high_full = static_cast<float>(_high_full->value());
+    float const cliff_start = static_cast<float>(_cliff_start->value());
+    float const cliff_full = static_cast<float>(_cliff_full->value());
+    float const noise_amount = static_cast<float>(_noise_amount->value());
+    float const noise_scale = static_cast<float>(_noise_scale->value());
+
+    constexpr int ALPHA_SIZE = 64;
+    float const texel_size = CHUNKSIZE / static_cast<float>(ALPHA_SIZE);
+
+    for (int az = 0; az < ALPHA_SIZE; ++az)
+    {
+      for (int ax = 0; ax < ALPHA_SIZE; ++ax)
+      {
+        int const offset = az * ALPHA_SIZE + ax;
+        float const world_x = chunk->xbase + (static_cast<float>(ax) + 0.5f) * texel_size;
+        float const world_z = chunk->zbase + (static_cast<float>(az) + 0.5f) * texel_size;
+
+        auto const [terrain_height, slope] = sampler.sample(chunk, world_x, world_z);
+        float const varied_height = terrain_height + world_noise(world_x, world_z, noise_scale) * noise_amount;
+
+        float low = descending_weight(varied_height, low_full, low_fade_end);
+        float high = ascending_weight(varied_height, high_fade_start, high_full);
+
+        if (low + high > 1.0f)
+        {
+          float const inv = 1.0f / (low + high);
+          low *= inv;
+          high *= inv;
+        }
+
+        float base = std::max(0.0f, 1.0f - low - high);
+        float const cliff = ascending_weight(slope, cliff_start, cliff_full);
+        float const non_cliff = 1.0f - cliff;
+
+        base *= non_cliff;
+        low *= non_cliff;
+        high *= non_cliff;
+
+        float total = base + low + high + cliff;
+        if (total <= 0.000001f)
+        {
+          base = 1.0f;
+          low = high = 0.0f;
+          total = 1.0f;
+        }
+
+        float const inv_total = 255.0f / total;
+        alpha[0][offset] = base * inv_total;
+        alpha[1][offset] = low * inv_total;
+        alpha[2][offset] = high * inv_total;
+        alpha[3][offset] = cliff * inv_total;
+      }
+    }
+
+    texture_set->apply_alpha_changes();
+    texture_set->updateDoodadMapping();
+    chunk->registerChunkUpdate(ChunkUpdateFlags::ALPHAMAP | ChunkUpdateFlags::GROUND_EFFECT);
+    return true;
+  }
+
+  void AutoTextureWidget::apply_live_auto(Noggit::Action* action)
+  {
+    if (!action || !_live_auto_checkbox || !_live_auto_checkbox->isChecked())
+      return;
+
+    if (!(action->getFlags() & Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE))
+      return;
+
+    // First-pass safety: never overwrite a texture operation that was already part of
+    // the action for another reason.
+    if (action->getFlags() & Noggit::ActionFlags::eCHUNKS_TEXTURE)
+    {
+      _live_auto_status->setText("Live Auto skipped: this action already contains texture edits.");
+      _live_auto_status->setStyleSheet("QLabel { color : orange; }");
+      return;
+    }
+
+    std::string reason;
+    if (!live_auto_configuration_valid(reason))
+    {
+      _live_auto_status->setText(QString("Live Auto skipped: %1.").arg(QString::fromStdString(reason)));
+      _live_auto_status->setStyleSheet("QLabel { color : orange; }");
+      return;
+    }
+
+    auto const changed_chunks = action->getChangedTerrainChunks();
+    if (changed_chunks.empty())
+      return;
+
+    auto* world = _map_view->getWorld();
+    std::set<MapChunk*> targets;
+    bool skipped_unselected_edge = false;
+    bool skipped_unloaded_edge = false;
+
+    for (MapChunk* changed : changed_chunks)
+    {
+      if (!changed || !changed->mt || !is_selected_adt(changed->mt->index))
+        continue;
+
+      for (int dz = -1; dz <= 1; ++dz)
+      {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+          int tile_x = static_cast<int>(changed->mt->index.x);
+          int tile_z = static_cast<int>(changed->mt->index.z);
+          int chunk_x = static_cast<int>(changed->px) + dx;
+          int chunk_z = static_cast<int>(changed->py) + dz;
+
+          if (chunk_x < 0)
+          {
+            --tile_x;
+            chunk_x += 16;
+          }
+          else if (chunk_x >= 16)
+          {
+            ++tile_x;
+            chunk_x -= 16;
+          }
+
+          if (chunk_z < 0)
+          {
+            --tile_z;
+            chunk_z += 16;
+          }
+          else if (chunk_z >= 16)
+          {
+            ++tile_z;
+            chunk_z -= 16;
+          }
+
+          if (tile_x < 0 || tile_x >= 64 || tile_z < 0 || tile_z >= 64)
+            continue;
+
+          TileIndex const target_index(static_cast<std::size_t>(tile_x), static_cast<std::size_t>(tile_z));
+          if (!is_selected_adt(target_index))
+          {
+            if (dx != 0 || dz != 0)
+              skipped_unselected_edge = true;
+            continue;
+          }
+
+          MapTile* tile = world->mapIndex.getTile(target_index);
+          if (!tile || !tile->finishedLoading())
+          {
+            skipped_unloaded_edge = true;
+            continue;
+          }
+
+          MapChunk* target = tile->getChunk(static_cast<unsigned>(chunk_x), static_cast<unsigned>(chunk_z));
+          if (target && target->getTextureSet())
+            targets.insert(target);
+        }
+      }
+    }
+
+    if (targets.empty())
+    {
+      _live_auto_status->setText("Live Auto: terrain edit finished outside the selected Auto Texture ADTs.");
+      _live_auto_status->setStyleSheet(QString());
+      return;
+    }
+
+    std::size_t processed = 0;
+    for (MapChunk* target : targets)
+    {
+      if (apply_auto_texture_to_chunk(target, action))
+      {
+        world->mapIndex.setChanged(target->mt);
+        ++processed;
+      }
+    }
+
+    QString status = QString("Live Auto: updated %1 chunk(s) after terrain edit.")
+      .arg(static_cast<qulonglong>(processed));
+    if (skipped_unselected_edge)
+      status += " Neighbor ring stopped at unselected ADT coverage.";
+    if (skipped_unloaded_edge)
+      status += " Unloaded selected neighbor(s) were skipped.";
+
+    _live_auto_status->setText(status);
+    if (skipped_unloaded_edge)
+      _live_auto_status->setStyleSheet("QLabel { color : orange; }");
+    else
+      _live_auto_status->setStyleSheet(QString());
+  }
+
   void AutoTextureWidget::apply_auto_texture()
   {
     if (NOGGIT_CUR_ACTION)
@@ -793,9 +1093,6 @@ namespace Noggit::Ui::Tools
 
     auto* action = NOGGIT_ACTION_MGR->beginAction(_map_view, Noggit::ActionFlags::eCHUNKS_TEXTURE);
 
-    float const noise_amount = static_cast<float>(_noise_amount->value());
-    float const noise_scale = static_cast<float>(_noise_scale->value());
-
     std::size_t chunks_changed = 0;
     int const total_chunks = static_cast<int>(_selected_adts.size() * 16 * 16);
     QProgressDialog progress("Auto Texturing selected ADTs...", QString(), 0, total_chunks, this);
@@ -818,76 +1115,11 @@ namespace Noggit::Ui::Tools
           if (!chunk || !chunk->getTextureSet())
             continue;
 
-          action->registerChunkTextureChange(chunk);
-
-          TextureSet* texture_set = chunk->getTextureSet();
-          texture_set->eraseTextures();
-          for (TextureSlot const& slot : _texture_slots)
+          if (apply_auto_texture_to_chunk(chunk, action))
           {
-            texture_set->addTexture(scoped_blp_texture_reference(slot.filename, world->getRenderContext()));
+            ++chunks_changed;
+            progress.setValue(static_cast<int>(chunks_changed));
           }
-
-          texture_set->create_temporary_alphamaps_if_needed();
-          auto& temp_ptr = texture_set->getTempAlphamaps();
-          if (!temp_ptr)
-            continue;
-
-          ChunkTerrainSampler const sampler(chunk);
-          tmp_edit_alpha_values& alpha = *temp_ptr;
-
-          constexpr int ALPHA_SIZE = 64;
-          float const texel_size = CHUNKSIZE / static_cast<float>(ALPHA_SIZE);
-
-          for (int az = 0; az < ALPHA_SIZE; ++az)
-          {
-            for (int ax = 0; ax < ALPHA_SIZE; ++ax)
-            {
-              int const offset = az * ALPHA_SIZE + ax;
-              float const world_x = chunk->xbase + (static_cast<float>(ax) + 0.5f) * texel_size;
-              float const world_z = chunk->zbase + (static_cast<float>(az) + 0.5f) * texel_size;
-
-              auto const [terrain_height, slope] = sampler.sample(chunk, world_x, world_z);
-              float const varied_height = terrain_height + world_noise(world_x, world_z, noise_scale) * noise_amount;
-
-              float low = descending_weight(varied_height, static_cast<float>(low_full), static_cast<float>(low_fade_end));
-              float high = ascending_weight(varied_height, static_cast<float>(high_fade_start), static_cast<float>(high_full));
-
-              if (low + high > 1.0f)
-              {
-                float const inv = 1.0f / (low + high);
-                low *= inv;
-                high *= inv;
-              }
-
-              float base = std::max(0.0f, 1.0f - low - high);
-              float const cliff = ascending_weight(slope, static_cast<float>(cliff_start), static_cast<float>(cliff_full));
-              float const non_cliff = 1.0f - cliff;
-
-              base *= non_cliff;
-              low *= non_cliff;
-              high *= non_cliff;
-
-              float total = base + low + high + cliff;
-              if (total <= 0.000001f)
-              {
-                base = 1.0f;
-                low = high = 0.0f;
-                total = 1.0f;
-              }
-
-              float const inv_total = 255.0f / total;
-              alpha[0][offset] = base * inv_total;
-              alpha[1][offset] = low * inv_total;
-              alpha[2][offset] = high * inv_total;
-              alpha[3][offset] = cliff * inv_total;
-            }
-          }
-
-          texture_set->apply_alpha_changes();
-          texture_set->updateDoodadMapping();
-          chunk->registerChunkUpdate(ChunkUpdateFlags::ALPHAMAP | ChunkUpdateFlags::GROUND_EFFECT);
-          ++chunks_changed;
-          progress.setValue(static_cast<int>(chunks_changed));
         }
       }
 

@@ -113,7 +113,7 @@ namespace Noggit
         {
             if (params.mod_shift_down)
             {
-                NOGGIT_ACTION_MGR->beginAction(mapView(), Noggit::ActionFlags::eCHUNKS_TERRAIN,
+                NOGGIT_ACTION_MGR->beginAction(mapView(), Noggit::ActionFlags::eCHUNKS_TERRAIN | Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE,
                     Noggit::ActionModalityControllers::eSHIFT
                     | Noggit::ActionModalityControllers::eLMB);
                 _flattenTool->flatten(mapView()->getWorld(), mapView()->cursorPosition(), deltaTime);
@@ -121,7 +121,7 @@ namespace Noggit
             else if (params.mod_ctrl_down)
             {
 
-                NOGGIT_ACTION_MGR->beginAction(mapView(), Noggit::ActionFlags::eCHUNKS_TERRAIN,
+                NOGGIT_ACTION_MGR->beginAction(mapView(), Noggit::ActionFlags::eCHUNKS_TERRAIN | Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE,
                     Noggit::ActionModalityControllers::eCTRL
                     | Noggit::ActionModalityControllers::eLMB);
                 _flattenTool->blur(mapView()->getWorld(), mapView()->cursorPosition(), deltaTime);

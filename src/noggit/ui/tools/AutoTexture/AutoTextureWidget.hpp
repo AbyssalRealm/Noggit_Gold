@@ -12,11 +12,18 @@
 #include <vector>
 
 class QLabel;
+class QCheckBox;
 class QListWidget;
 class QDoubleSpinBox;
 class QSpinBox;
 class QPushButton;
 class MapView;
+class MapChunk;
+
+namespace Noggit
+{
+  class Action;
+}
 
 namespace Noggit::Ui
 {
@@ -65,6 +72,8 @@ namespace Noggit::Ui::Tools
     QDoubleSpinBox* _noise_scale = nullptr;
 
     QPushButton* _apply_button = nullptr;
+    QCheckBox* _live_auto_checkbox = nullptr;
+    QLabel* _live_auto_status = nullptr;
 
     void add_adt(TileIndex const& index);
     void remove_selected_adt();
@@ -75,6 +84,10 @@ namespace Noggit::Ui::Tools
     bool scan_selected_height_range(float& min_height, float& max_height) const;
     void update_height_feedback();
     void fit_height_ranges();
+    bool live_auto_configuration_valid(std::string& reason) const;
+    bool is_selected_adt(TileIndex const& index) const;
+    bool apply_auto_texture_to_chunk(MapChunk* chunk, Noggit::Action* action);
+    void apply_live_auto(Noggit::Action* action);
     void apply_auto_texture();
   };
 }

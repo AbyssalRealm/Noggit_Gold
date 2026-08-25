@@ -105,6 +105,7 @@ void ActionManager::endAction()
 {
   assert(_cur_action && "ActionStack Error: endAction() called with no action running.");
 
+  emit onActionAboutToFinish(_cur_action);
   _cur_action->finish();
   if (!(_cur_action->getFlags() & eDO_NOT_WRITE_HISTORY))
   {
@@ -130,6 +131,7 @@ void ActionManager::endActionOnModalityMismatch(unsigned modality_controls)
 
   if ((modality_controls & _cur_action->getModalityControllers()) != _cur_action->getModalityControllers())
   {
+    emit onActionAboutToFinish(_cur_action);
     _cur_action->finish();
     if (!(_cur_action->getFlags() & eDO_NOT_WRITE_HISTORY))
     {

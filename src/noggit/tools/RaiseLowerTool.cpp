@@ -135,6 +135,9 @@ namespace Noggit
                     Noggit::ActionModalityControllers::eSHIFT
                     | Noggit::ActionModalityControllers::eLMB);
 
+                if (_terrainTool->_edit_type != eTerrainType_Vertex && _terrainTool->_edit_type != eTerrainType_Script)
+                    action->addFlags(Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE);
+
                 action->setPostCallback([this] { randomizeTerrainRotation(); });
 
                 _terrainTool->changeTerrain(mv->getWorld(), mv->cursorPosition(), 7.5f * deltaTime);
@@ -144,6 +147,9 @@ namespace Noggit
                 auto action = NOGGIT_ACTION_MGR->beginAction(mv, Noggit::ActionFlags::eCHUNKS_TERRAIN,
                     Noggit::ActionModalityControllers::eCTRL
                     | Noggit::ActionModalityControllers::eLMB);
+
+                if (_terrainTool->_edit_type != eTerrainType_Vertex && _terrainTool->_edit_type != eTerrainType_Script)
+                    action->addFlags(Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE);
 
                 action->setPostCallback([this] { randomizeTerrainRotation(); });
 
@@ -233,6 +239,7 @@ namespace Noggit
                         Noggit::ActionModalityControllers::eSHIFT
                         | Noggit::ActionModalityControllers::eLMB);
 
+                    action->addFlags(Noggit::ActionFlags::eLIVE_AUTOTEXTURE_ELIGIBLE);
                     action->setPostCallback([this] { randomizeTerrainRotation(); });
 
                     _terrainTool->changeTerrain(mapView()->getWorld(), mapView()->cursorPosition(), params.relative_movement.dx() / 30.0f);
