@@ -1,5 +1,3 @@
-![Noggit Gold Studio](media/splash.png)
-
 # Noggit_Gold
 
 **Noggit_Gold** is a WotLK 3.3.5 map-authoring continuation built from the merged Noggit Red production source, with selected useful behavior adapted from earlier Noggit branches while preserving Red/Gold's newer architecture.
@@ -147,16 +145,18 @@ Do **not** upload proprietary Blizzard game data to this repository when reporti
 
 ## Project Lineage and Credits
 
-Noggit_Gold is **not** presented as a from-scratch editor. It continues an existing Noggit lineage and preserves the inherited source history, licenses, notices, and contributor work contained in this tree.
+Noggit_Gold is **not** presented as a from-scratch editor. It continues the existing Noggit lineage and preserves inherited source history, licenses, notices, and contributor work.
 
 The retained project lineage includes:
 
-- original **Noggit / Noggit3** contributors;
-- the **Noggit Red** family of forks/work, including Titi/T1ti, VarenRoth, RussianBias, and merge/additional work associated with Marlamin where represented by the inherited source/history;
-- selected behavior adapted from **Noggit Green** into the Red/Gold production architecture;
-- **Noggit_Gold** additions and adaptations developed for the Abyssal Realm toolchain.
+- **Noggit / Noggit3** — original upstream project and contributors;
+- **Skarn** — creator and original developer of **Noggit Red**;
+- **Titi / T1ti, Varenroth, RussianBias, and other Noggit Red contributors** — later Red development, features, fixes, and branch/fork work;
+- **Marlamin** — maintained a separate Noggit Red aggregation fork combining work from the Titi, Varenroth, and RussianBias forks, with additional changes;
+- **Noggit Green** — selected useful behavior adapted into the current Red/Gold production architecture where present;
+- **Noggit_Gold / Abyssal Realm** — current integration, maintenance, fixes, and new Gold additions/adaptations.
 
-Before any final stable/public release, contributor/provenance details should be audited once more against the exact published Git history rather than relying on a short README summary.
+The retained Git history and upstream notices remain the detailed attribution authority. If an inherited contribution is missing or described incorrectly, please report the exact source/history reference so the public credits can be corrected.
 
 ## License
 
