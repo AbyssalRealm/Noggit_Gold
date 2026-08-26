@@ -75,43 +75,73 @@ namespace Noggit
       auto tool_layout (new QVBoxLayout (tool_widget));
       tool_layout->setAlignment(Qt::AlignTop);
 
+      // Keep the Paint controls compact and top-aligned. The opacity slider is
+      // vertical/expanding by default, so without an explicit cap it can stretch
+      // this entire grid row and pull Hardness/Radius/Pressure far apart.
       auto slider_layout (new QGridLayout);
-      tool_layout->addItem(slider_layout);
-      auto slider_layout_left (new QVBoxLayout(tool_widget));
-      slider_layout->addLayout(slider_layout_left, 0, 0);
-      auto slider_layout_right(new QVBoxLayout(tool_widget));
-      slider_layout->addLayout(slider_layout_right, 0, 1);
+      slider_layout->setContentsMargins(0, 0, 0, 0);
+      slider_layout->setHorizontalSpacing(12);
+      slider_layout->setVerticalSpacing(4);
+      slider_layout->setColumnStretch(0, 1);
+      slider_layout->setColumnStretch(1, 0);
+      tool_layout->addLayout(slider_layout);
 
-      slider_layout_left->addWidget(new QLabel("Hardness:", tool_widget));
+      auto slider_layout_left (new QVBoxLayout);
+      slider_layout_left->setContentsMargins(0, 0, 0, 0);
+      slider_layout_left->setSpacing(4);
+      slider_layout_left->setAlignment(Qt::AlignTop);
+      slider_layout->addLayout(slider_layout_left, 0, 0, Qt::AlignTop);
+
+      auto slider_layout_right(new QVBoxLayout);
+      slider_layout_right->setContentsMargins(0, 0, 0, 0);
+      slider_layout_right->setSpacing(4);
+      slider_layout_right->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+      slider_layout->addLayout(slider_layout_right, 0, 1, Qt::AlignTop);
+
       _hardness_slider = new Noggit::Ui::Tools::UiCommon::ExtendedSlider(tool_widget);
-      _hardness_slider->setPrefix("");
+      _hardness_slider->setPrefix("Hardness:");
       _hardness_slider->setRange (0, 1);
       _hardness_slider->setDecimals(2);
       _hardness_slider->setSingleStep(0.05f);
       _hardness_slider->setValue(0.5f);
+      _hardness_slider->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+      if (auto* spin = _hardness_slider->findChild<QDoubleSpinBox*>())
+        spin->setMinimumWidth(105);
+      if (auto* label = _hardness_slider->findChild<QLabel*>())
+        label->setMinimumWidth(78);
       slider_layout_left->addWidget(_hardness_slider);
 
-      slider_layout_left->addWidget(new QLabel("Radius:", tool_widget));
       _radius_slider = new Noggit::Ui::Tools::UiCommon::ExtendedSlider(tool_widget);
-      _radius_slider->setPrefix("");
+      _radius_slider->setPrefix("Radius:");
       _radius_slider->setRange (0, 1000);
       _radius_slider->setDecimals (2);
       _radius_slider->setValue(_texture_brush.getRadius());
+      _radius_slider->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+      if (auto* spin = _radius_slider->findChild<QDoubleSpinBox*>())
+        spin->setMinimumWidth(105);
+      if (auto* label = _radius_slider->findChild<QLabel*>())
+        label->setMinimumWidth(78);
       slider_layout_left->addWidget (_radius_slider);
 
-      slider_layout_left->addWidget(new QLabel("Pressure:", tool_widget));
       _pressure_slider = new Noggit::Ui::Tools::UiCommon::ExtendedSlider(tool_widget);
-      _pressure_slider->setPrefix("");
+      _pressure_slider->setPrefix("Pressure:");
       _pressure_slider->setRange (0, 1.0f);
       _pressure_slider->setDecimals (2);
       _pressure_slider->setValue (0.9f);
+      _pressure_slider->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+      if (auto* spin = _pressure_slider->findChild<QDoubleSpinBox*>())
+        spin->setMinimumWidth(105);
+      if (auto* label = _pressure_slider->findChild<QLabel*>())
+        label->setMinimumWidth(78);
       slider_layout_left->addWidget (_pressure_slider);
 
-      slider_layout_right->addWidget(new QLabel("Opacity:", tool_widget));
+      slider_layout_right->addWidget(new QLabel("Opacity:", tool_widget), 0, Qt::AlignHCenter);
       _brush_level_slider = new OpacitySlider(Qt::Orientation::Vertical, tool_widget);
       _brush_level_slider->setRange (0, 255);
       _brush_level_slider->setToolTip("Opacity");
       _brush_level_slider->setSliderPosition (_brush_level);
+      _brush_level_slider->setFixedHeight(220);
+      _brush_level_slider->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
       _brush_level_slider->setObjectName("texturing_brush_level_slider");
       
@@ -142,7 +172,7 @@ namespace Noggit
       _brush_level_spin->setRange(0, 255);
       _brush_level_spin->setValue(_brush_level);
       _brush_level_spin->setSingleStep(5);
-      slider_layout_right->addWidget(_brush_level_spin);
+      slider_layout_right->addWidget(_brush_level_spin, 0, Qt::AlignHCenter);
 
       QSettings settings;
       bool use_classic_ui = settings.value("classicUI", false).toBool();

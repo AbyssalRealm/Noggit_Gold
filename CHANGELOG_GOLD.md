@@ -1,5 +1,28 @@
 # Noggit_Gold Changelog
 
+## Testing Checkpoint — 2026-08-25
+
+### Minimap Generator
+
+- Fixed tile-to-tile minimap rendering state/order behavior.
+- Tested Azeroth_31_41 and Azeroth_32_41 as an adjacent controlled pair.
+- Reversed generation order produced consistent output.
+- Fresh-session exports remained deterministic.
+- Shared tile boundaries remained visually coherent.
+- Minimap output and md5translate handling were retained.
+- Current Noggit_Gold minimap fix is accepted for broader testing.
+
+### Texture Painter — Paint Panel
+
+- Compacted the Paint tab layout.
+- Prevented the vertical Opacity control from stretching the entire panel.
+- Tightened Hardness, Radius and Pressure spacing.
+- Widened numeric value fields for large brush values including 1000.00.
+- Preserved existing paint ranges and painting behavior.
+- No changes to Swap, Anim, Auto Texture or Spray mechanics.
+
+After this checkpoint Noggit_Gold source development is intentionally being left closed for broader testing.
+
 ## Public Test Candidate — 2026-08-25
 
 ### Live Auto Texture PASS1 — SEMI-LIVE-PROVEN
