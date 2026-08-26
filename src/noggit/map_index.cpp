@@ -20,6 +20,7 @@
 #include <QTextStream>
 #include <QRegExp>
 #include <QFile>
+#include <QSaveFile>
 
 #include <forward_list>
 #include <sstream>
@@ -1166,8 +1167,9 @@ void MapIndex::loadMinimapMD5translate()
 {
   auto& minimap_md5translate = Noggit::Application::NoggitApplication::instance()->clientData()->_minimap_md5translate;
 
-  // already loaded.
-  if (minimap_md5translate.empty())
+  // The translation table is shared by all map indices and only needs to be
+  // loaded once. An empty table is precisely the state that requires loading.
+  if (!minimap_md5translate.empty())
     return;
 
   if (!Noggit::Application::NoggitApplication::instance()->clientData()->exists("textures/minimap/md5translate.trs"))
@@ -1180,10 +1182,11 @@ void MapIndex::loadMinimapMD5translate()
   BlizzardArchive::ClientFile md5trs_file("textures/minimap/md5translate.trs", Noggit::Application::NoggitApplication::instance()->clientData());
 
   size_t size = md5trs_file.getSize();
-  void* buffer_raw = std::malloc(size);
-  md5trs_file.read(buffer_raw, size);
-
-  QByteArray md5trs_bytes(static_cast<char*>(buffer_raw), static_cast<int>(size));
+  QByteArray md5trs_bytes(static_cast<int>(size), '\0');
+  if (size)
+  {
+    md5trs_file.read(md5trs_bytes.data(), size);
+  }
 
   QTextStream md5trs_stream(md5trs_bytes, QIODevice::ReadOnly);
 
@@ -1222,7 +1225,7 @@ void MapIndex::loadMinimapMD5translate()
 
 }
 
-void MapIndex::saveMinimapMD5translate()
+bool MapIndex::saveMinimapMD5translate()
 {
   QString str = QString(Noggit::Project::CurrentProject::get()->ProjectPath.c_str());
   if (!(str.endsWith('\\') || str.endsWith('/')))
@@ -1232,8 +1235,8 @@ void MapIndex::saveMinimapMD5translate()
 
   QString filepath = str + "/textures/minimap/md5translate.trs";
 
-  QFile file = QFile(filepath);
-  if (file.open(QIODevice::WriteOnly | QIODevice::Text | QFile::Truncate))
+  QSaveFile file(filepath);
+  if (file.open(QIODevice::WriteOnly | QIODevice::Text))
   {
     QTextStream out(&file);
 
@@ -1249,16 +1252,21 @@ void MapIndex::saveMinimapMD5translate()
       }
     }
 
-    file.close();
+    out.flush();
+    bool const write_ok = out.status() == QTextStream::Ok && file.commit();
+
+    if (!write_ok)
+    {
+      LogError << "Failed saving md5translate.trs. The complete translation table could not be written." << std::endl;
+    }
+
+    return write_ok;
   }
   else
   {
     LogError << "Failed saving md5translate.trs. File can't be opened." << std::endl;
+    return false;
   }
-
-
-
-
 }
 
 void MapIndex::addTile(const TileIndex& tile)
@@ -1270,6 +1278,7 @@ void MapIndex::addTile(const TileIndex& tile)
       mBigAlpha, true, use_mclq_green_lava(), false, _world, _context);
 
   mTiles[tile.z][tile.x].flags |= 0x1;
+  _n_existing_tiles = -1;
   mTiles[tile.z][tile.x].tile->changed = true;
 
   _world->horizon.update_horizon_tile(mTiles[tile.z][tile.x].tile.get());
@@ -1280,6 +1289,7 @@ void MapIndex::addTile(const TileIndex& tile)
 void MapIndex::removeTile(const TileIndex &tile)
 {
   mTiles[tile.z][tile.x].flags &= ~0x1;
+  _n_existing_tiles = -1;
 
   std::stringstream filename;
   filename << "World\\Maps\\" << basename << "\\" << basename << "_" << tile.x << "_" << tile.z << ".adt";

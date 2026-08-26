@@ -219,7 +219,7 @@ public:
   bool uid_fix_all_in_progress() const;
 
   void loadMinimapMD5translate();
-  void saveMinimapMD5translate();
+  bool saveMinimapMD5translate();
 
 private:
 	uint32_t getHighestGUIDFromFile(const std::string& pFilename) const;

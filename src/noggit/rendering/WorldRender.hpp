@@ -111,7 +111,7 @@ namespace Noggit::Rendering
 
   private:
 
-    void drawMinimap ( MapTile *tile
+    bool drawMinimap ( MapTile *tile
         , glm::mat4x4 const& model_view
         , glm::mat4x4 const& projection
         , glm::vec3 const& camera_pos

@@ -51,9 +51,11 @@ namespace Noggit
 
         unsigned _mmap_async_index = 0;
         unsigned _mmap_render_index = 0;
+        unsigned _mmap_output_count = 0;
         std::optional<QImage> _mmap_combined_image;
 
         bool saving_minimap = false;
+        bool _mmap_render_failed = false;
 
         void finishSaving(QProgressBar* progress, QPushButton* cancel_btn, World* world, MinimapRenderSettings* settings);
     };

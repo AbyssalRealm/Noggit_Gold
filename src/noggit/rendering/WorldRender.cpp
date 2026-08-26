@@ -28,9 +28,11 @@
 #include <QDir>
 #include <QListWidget>
 #include <QOpenGLFramebufferObjectFormat>
+#include <QSaveFile>
 #include <QSettings>
 
 #include <algorithm>
+#include <cstdlib>
 
 using namespace Noggit::Rendering;
 
@@ -130,6 +132,7 @@ void WorldRender::draw (glm::mat4x4 const& model_view
     _terrain_params_ubo_data.draw_noeffectdoodad_overlay = false;
     _terrain_params_ubo_data.draw_only_normals = minimap_render_settings->draw_only_normals;
     _terrain_params_ubo_data.point_normals_up = minimap_render_settings->point_normals_up;
+    _terrain_params_ubo_data.minimap_render = true;
     _need_terrain_params_ubo_update = true;
   }
 
@@ -142,6 +145,14 @@ void WorldRender::draw (glm::mat4x4 const& model_view
   // After coming out of minimap rendering mode and point_normals_up is still on, disable it.
   if (!render_settings.minimap_render && _terrain_params_ubo_data.point_normals_up) {
       _terrain_params_ubo_data.point_normals_up = false;
+      _need_terrain_params_ubo_update = true;
+  }
+
+  // Terrain specular is view-dependent. Minimap ADTs are captured with a
+  // different camera per tile, so retaining it bakes a discontinuity into
+  // otherwise adjacent images. Restore it immediately for the normal 3D view.
+  if (!render_settings.minimap_render && _terrain_params_ubo_data.minimap_render) {
+      _terrain_params_ubo_data.minimap_render = false;
       _need_terrain_params_ubo_update = true;
   }
 
@@ -2045,7 +2056,7 @@ void WorldRender::setupOccluderBuffers()
 
 }
 
-void WorldRender::drawMinimap ( MapTile *tile
+bool WorldRender::drawMinimap ( MapTile *tile
     , glm::mat4x4 const& model_view
     , glm::mat4x4 const& projection
     , glm::vec3 const& camera_pos
@@ -2054,11 +2065,18 @@ void WorldRender::drawMinimap ( MapTile *tile
 {
   ZoneScoped;
 
+  if (!tile)
+  {
+    LogError << "Minimap render received a null target tile." << std::endl;
+    return false;
+  }
+
   // Also load a tile above the current one to correct the lookat approximation
   TileIndex m_tile = TileIndex(camera_pos);
   m_tile.z -= 1;
 
-  bool unload = !_world->mapIndex.has_unsaved_changes(m_tile);
+  bool const helper_was_loaded = _world->mapIndex.tileLoaded(m_tile)
+      || _world->mapIndex.tileAwaitingLoading(m_tile);
 
   MapTile* mTile = _world->mapIndex.loadTile(m_tile);
 
@@ -2066,7 +2084,11 @@ void WorldRender::drawMinimap ( MapTile *tile
   {
     mTile->wait_until_loaded();
     mTile->waitForChildrenLoaded();
-
+  }
+  else if (_world->mapIndex.hasTile(m_tile))
+  {
+    LogError << "Minimap render could not load helper tile " << m_tile.x << "_" << m_tile.z << std::endl;
+    return false;
   }
 
   WorldRenderParams renderParams;
@@ -2109,10 +2131,12 @@ void WorldRender::drawMinimap ( MapTile *tile
   glm::vec3(), camera_pos, settings, renderParams);
 
 
-  if (unload)
+  if (mTile && !helper_was_loaded)
   {
     _world->mapIndex.unloadTile(m_tile);
   }
+
+  return true;
 }
 
 bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* settings, std::optional<QImage>& combined_image)
@@ -2125,40 +2149,54 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
   fmt.setAttachment(QOpenGLFramebufferObject::Depth);
 
   QOpenGLFramebufferObject pixel_buffer(settings->resolution, settings->resolution, fmt);
-  pixel_buffer.bind();
+  if (!pixel_buffer.isValid() || !pixel_buffer.bind())
+  {
+    LogError << "Failed to create minimap framebuffer for tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+    return false;
+  }
 
   gl.viewport(0, 0, settings->resolution, settings->resolution);
   gl.clearColor(.0f, .0f, .0f, 1.f);
   gl.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  // Load tile
-  bool unload = !_world->mapIndex.has_unsaved_changes(tile_idx);
+  // Only unload tiles that this save operation loaded itself. Previously this
+  // used the tile's changed flag, which could unload pre-existing viewport
+  // tiles merely because they had no unsaved edits.
+  bool const tile_was_loaded = _world->mapIndex.tileLoaded(tile_idx)
+      || _world->mapIndex.tileAwaitingLoading(tile_idx);
+  MapTile* mTile = _world->mapIndex.loadTile(tile_idx);
+  bool const unload_tile = mTile && !tile_was_loaded;
 
-  if (!_world->mapIndex.tileLoaded(tile_idx) && !_world->mapIndex.tileAwaitingLoading(tile_idx))
+  if (!mTile)
   {
-    MapTile* tile = _world->mapIndex.loadTile(tile_idx);
-    tile->wait_until_loaded();
-    _world->wait_for_all_tile_updates();
-    tile->waitForChildrenLoaded();
+    LogError << "Minimap render could not load tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+    pixel_buffer.release();
+    return false;
   }
 
-  MapTile* mTile = _world->mapIndex.getTile(tile_idx);
+  mTile->wait_until_loaded();
+  _world->wait_for_all_tile_updates();
+  mTile->waitForChildrenLoaded();
 
-  if (mTile)
+  unsigned counter = 0;
+  constexpr unsigned TIMEOUT = 5000;
+
+  while (!mTile->finishedLoading() || !mTile->texturesFinishedLoading())
   {
-    unsigned counter = 0;
-    constexpr unsigned TIMEOUT = 5000;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    counter++;
 
-    while (AsyncLoader::instance->is_loading() || !mTile->finishedLoading())
+    if (counter >= TIMEOUT)
     {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      counter++;
-
-      if (counter >= TIMEOUT)
-        break;
+      LogError << "Minimap render timed out waiting for tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+      if (unload_tile)
+        _world->mapIndex.unloadTile(tile_idx);
+      pixel_buffer.release();
+      return false;
     }
+  }
 
-    float max_height = std::max(_world->getMaxTileHeight(tile_idx), 200.f);
+  float max_height = std::max(_world->getMaxTileHeight(tile_idx), 200.f);
 
     // setup view matrices
     auto projection = glm::ortho( -TILESIZE / 2.0f,TILESIZE / 2.0f,-TILESIZE / 2.0f,TILESIZE / 2.0f,0.f,100000.0f);
@@ -2179,12 +2217,18 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
 
     glFinish();
 
-    drawMinimap(mTile
+  if (!drawMinimap(mTile
         , look_at
         , projection
         , glm::vec3(TILESIZE * tile_idx.x + TILESIZE / 2.0f
             , max_height + 15.0f, TILESIZE * tile_idx.z + TILESIZE / 2.0f)
-        , settings);
+        , settings))
+  {
+    if (unload_tile)
+      _world->mapIndex.unloadTile(tile_idx);
+    pixel_buffer.release();
+    return false;
+  }
 
     // Clearing alpha from image
     gl.colorMask(false, false, false, true);
@@ -2197,6 +2241,15 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
     QImage image = pixel_buffer.toImage();
 
     image = image.convertToFormat(QImage::Format_RGBA8888);
+    pixel_buffer.release();
+
+    if (image.isNull())
+    {
+      LogError << "Minimap framebuffer read failed for tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+      if (unload_tile)
+        _world->mapIndex.unloadTile(tile_idx);
+      return false;
+    }
 
     QString str = QString(Noggit::Project::CurrentProject::get()->ProjectPath.c_str());
     if (!(str.endsWith('\\') || str.endsWith('/')))
@@ -2211,8 +2264,13 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
 	}
 
     QDir dir(str + target_dir);
-    if (!dir.exists())
-      dir.mkpath(".");
+    if (!dir.exists() && !dir.mkpath("."))
+    {
+      LogError << "Failed to create minimap output directory " << dir.path().toStdString() << std::endl;
+      if (unload_tile)
+        _world->mapIndex.unloadTile(tile_idx);
+      return false;
+    }
 
     std::string tex_name = std::string(_world->basename + "_" + std::to_string(tile_idx.x) + "_" + std::to_string(tile_idx.z) + ".blp");
     if (settings->export_mode == MinimapGenMode::LOD_MAPTEXTURES_N)
@@ -2220,51 +2278,85 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
         tex_name = std::string(_world->basename + "_" + std::to_string(tile_idx.x) + "_" + std::to_string(tile_idx.z) + "_n.blp");
     }
 
+    bool output_success = false;
+    bool wrote_minimap_blp = false;
+
     if (settings->file_format == ".png")
     {
-      image.save(dir.filePath(std::string(_world->basename + "_" + std::to_string(tile_idx.x) + "_" + std::to_string(tile_idx.z) + ".png").c_str()));
+      QString const output_path = dir.filePath(std::string(_world->basename + "_" + std::to_string(tile_idx.x) + "_" + std::to_string(tile_idx.z) + ".png").c_str());
+      QSaveFile output_file(output_path);
+      output_success = output_file.open(QIODevice::WriteOnly)
+          && image.save(&output_file, "PNG")
+          && output_file.commit();
+      if (!output_success)
+        LogError << "Failed saving minimap PNG " << output_path.toStdString() << std::endl;
     }
     else if (settings->file_format == ".blp (DXT1)" || settings->file_format == ".blp (DXT5)")
     {
       QByteArray bytes;
       QBuffer buffer( &bytes );
-      buffer.open( QIODevice::WriteOnly );
-
-      image.save( &buffer, "PNG" );
-
-      auto blp = Png2Blp();
-      blp.load(reinterpret_cast<const void*>(bytes.constData()), bytes.size());
-
-      uint32_t file_size;
-      // void* blp_image = blp.createBlpDxtInMemory(true, FORMAT_DXT5, file_size);
-      // this mirrors blizzards : dxt1, no mipmap
-      void* blp_image = blp.createBlpDxtInMemory(settings->file_format == ".blp (DXT5)" ? true : false, settings->file_format == ".blp (DXT5)" ? FORMAT_DXT5 : FORMAT_DXT1, file_size);
-
-      // converts the texture name to an md5 hash like blizzard, this is used to avoid duplicates textures for ocean
-      // downside is that if the file gets updated regularly there will be a lot of duplicates in the project folder
-      // probably should be a patching option when deploying
-      bool use_md5 = false;
-      if (use_md5)
+      if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG"))
       {
+        LogError << "Failed preparing minimap image for BLP conversion on tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+      }
+      else
+      {
+
+        auto blp = Png2Blp();
+        blp.load(reinterpret_cast<const void*>(bytes.constData()), bytes.size());
+
+        uint32_t file_size = 0;
+        // This mirrors Blizzard minimaps: DXT1 without generated mipmaps.
+        void* blp_image = blp.createBlpDxtInMemory(settings->file_format == ".blp (DXT5)", settings->file_format == ".blp (DXT5)" ? FORMAT_DXT5 : FORMAT_DXT1, file_size);
+
+        // Converts the texture name to an MD5 hash like Blizzard. Disabled by
+        // default because repeated edits otherwise leave duplicate textures.
+        bool use_md5 = false;
+        if (use_md5 && blp_image && file_size)
+        {
           QCryptographicHash md5_hash(QCryptographicHash::Md5);
-          // md5_hash.addData(reinterpret_cast<char*>(blp_image), file_size);
           QByteArray data(reinterpret_cast<const char*>(blp_image), file_size);
           md5_hash.addData(data);
           auto resulthex = md5_hash.result().toHex().toStdString() + ".blp";
           tex_name = resulthex;
+        }
+
+        if (!blp_image || !file_size)
+        {
+          LogError << "BLP conversion failed for tile " << tile_idx.x << "_" << tile_idx.z << std::endl;
+        }
+        else
+        {
+          QSaveFile file(dir.filePath(tex_name.c_str()));
+          if (!file.open(QIODevice::WriteOnly))
+          {
+            LogError << "Failed opening minimap BLP for writing: " << file.fileName().toStdString() << std::endl;
+          }
+          else
+          {
+            qint64 const written = file.write(reinterpret_cast<const char*>(blp_image), static_cast<qint64>(file_size));
+            output_success = written == static_cast<qint64>(file_size) && file.commit();
+
+            if (!output_success)
+              LogError << "Failed writing complete minimap BLP " << file.fileName().toStdString() << std::endl;
+          }
+
+        }
+
+        std::free(blp_image);
       }
 
-      QFile file(dir.filePath(tex_name.c_str()));
-      file.open(QIODevice::WriteOnly);
-
-      QDataStream out(&file);
-      out.writeRawData(reinterpret_cast<char*>(blp_image), file_size);
-
-      file.close();
+      bool const is_minimap = settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES
+          && settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES_N;
+      wrote_minimap_blp = output_success && is_minimap;
+    }
+    else
+    {
+      LogError << "Unsupported minimap output format: " << settings->file_format << std::endl;
     }
 
     // Write combined file
-    if (settings->combined_minimap && combined_image.has_value())
+    if (output_success && settings->combined_minimap && combined_image.has_value())
     {
       QImage scaled_image = image.scaled(128, 128,  Qt::KeepAspectRatio);
 
@@ -2278,32 +2370,32 @@ bool WorldRender::saveMinimap(TileIndex const& tile_idx, MinimapRenderSettings* 
 
     }
 
-    // Register in md5translate.trs
-    try
+    // Only client-ready minimap BLP files belong in md5translate.trs. PNGs are
+    // diagnostics and maptextures have a separate output path.
+    if (wrote_minimap_blp)
     {
+      try
+      {
         std::string map_name = gMapDB.getByID(_world->mapIndex._map_id).getString(MapDB::InternalName);
         auto sstream = std::stringstream();
         sstream << map_name << "\\map" << tile_idx.x << "_" << std::setfill('0') << std::setw(2) << tile_idx.z << ".blp";
         std::string tilename_left = sstream.str();
         auto& minimap_md5translate = Noggit::Application::NoggitApplication::instance()->clientData()->_minimap_md5translate;
         minimap_md5translate[map_name][tilename_left] = tex_name;
-    }
-    catch(MapDB::NotFound)
-    {
+      }
+      catch(MapDB::NotFound)
+      {
         LogError << "SaveMinimap : Couldn't find entry " << _world->mapIndex._map_id << std::endl;
-        assert(false);
+        output_success = false;
+      }
     }
 
-    if (unload)
+    if (unload_tile)
     {
       _world->mapIndex.unloadTile(tile_idx);
     }
 
-  }
-
-  pixel_buffer.release();
-
-  return true;
+    return output_success;
 }
 
 [[nodiscard]]

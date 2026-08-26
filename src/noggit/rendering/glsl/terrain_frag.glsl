@@ -38,6 +38,7 @@ layout (std140) uniform overlay_params
   int draw_noeffectdoodad_overlay;
   int draw_only_normals;
   int point_normals_up;
+  int minimap_render;
 };
 
 struct ChunkInstanceData
@@ -331,8 +332,12 @@ void main()
   currColor = mix(groundColor, skyColor, 0.5 + (0.5 * nDotL));
   lDiffuse = DiffuseColor_FogStart.xyz * nDotL;
 
-  vec3 reflection = normalize(normalized_normal - (-LightDir_FogRate.xyz));
-  float specularFactor = max(dot(reflection, normalize(camera - vary_position)), 0.0);
+  float specularFactor = 0.0;
+  if (minimap_render == 0)
+  {
+    vec3 reflection = normalize(normalized_normal - (-LightDir_FogRate.xyz));
+    specularFactor = max(dot(reflection, normalize(camera - vary_position)), 0.0);
+  }
 
   // blend textures
   if(enable_mists_heightmapping)

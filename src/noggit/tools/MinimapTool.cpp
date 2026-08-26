@@ -53,6 +53,8 @@ namespace Noggit
 
         QObject::connect(_minimapTool, &Ui::MinimapCreator::onSave, [=] {
             saving_minimap = true;
+            _mmap_render_failed = false;
+            _mmap_output_count = 0;
             });
     }
 
@@ -114,6 +116,8 @@ namespace Noggit
                 {
                     _mmap_async_index = 0;
                     _mmap_render_index = 0;
+                    _mmap_output_count = 0;
+                    _mmap_render_failed = false;
                     saving_minimap = false;
                     progress->deleteLater();
                     cancel_btn->deleteLater();
@@ -140,15 +144,8 @@ namespace Noggit
             }
             };
 
-        auto save = [=, &mmap_render_success]()
+        auto save = [=, &mmap_render_success](TileIndex const& tile)
             {
-                while (!world->mapIndex.hasTile({ _mmap_async_index / 64, _mmap_async_index % 64 }))
-                {
-                    ++_mmap_async_index;
-                }
-
-                TileIndex tile = TileIndex(_mmap_async_index / 64, _mmap_async_index % 64);
-
                 if (world->mapIndex.hasTile(tile))
                 {
                     OpenGL::context::scoped_setter const _(::gl, mv->context());
@@ -160,9 +157,23 @@ namespace Noggit
 
                     if (!mmap_render_success)
                     {
+                        _mmap_render_failed = true;
                         LogError << "Minimap rendered incorrectly for tile: " << tile.x << "_" << tile.z << std::endl;
                     }
+                    else
+                    {
+                        _mmap_output_count++;
+                    }
                 }
+            };
+
+        auto writes_translation_table = [=]()
+            {
+                bool const is_blp = settings->file_format == ".blp (DXT1)"
+                    || settings->file_format == ".blp (DXT5)";
+                bool const is_minimap = settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES
+                    && settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES_N;
+                return is_blp && is_minimap;
             };
 
 
@@ -176,11 +187,19 @@ namespace Noggit
             {
                 mmap_render_success = world->renderer()->saveMinimap(tile, settings, _mmap_combined_image);
             }
-
-            if (mmap_render_success)
+            else
             {
-                world->mapIndex.saveMinimapMD5translate();
+                LogError << "Current ADT has no tile to render: " << tile.x << "_" << tile.z << std::endl;
             }
+
+            if (mmap_render_success && writes_translation_table()
+                && !world->mapIndex.saveMinimapMD5translate())
+            {
+                mmap_render_success = false;
+            }
+
+            if (!mmap_render_success)
+                LogError << "Current ADT minimap export failed for tile: " << tile.x << "_" << tile.z << std::endl;
 
             saving_minimap = false;
 
@@ -219,9 +238,16 @@ namespace Noggit
                 }
             }
 
+            while (_mmap_async_index < 4096
+                && !world->mapIndex.hasTile({ _mmap_async_index / 64, _mmap_async_index % 64 }))
+            {
+                ++_mmap_async_index;
+            }
+
             if (_mmap_async_index < 4096 && static_cast<int>(_mmap_render_index) < progress->maximum())
             {
-                save();
+                TileIndex const tile(_mmap_async_index / 64, _mmap_async_index % 64);
+                save(tile);
                 _mmap_async_index++;
             }
             else
@@ -243,7 +269,8 @@ namespace Noggit
 
                 for (int i = 0; i < 4096; ++i)
                 {
-                    if (selected_tiles->at(i))
+                    TileIndex const tile(i / 64, i % 64);
+                    if (selected_tiles->at(i) && world->mapIndex.hasTile(tile))
                         n_selected_tiles++;
                 }
 
@@ -253,12 +280,18 @@ namespace Noggit
             if (!saving_minimap)
                 return false;
 
+            while (_mmap_async_index < 4096)
+            {
+                TileIndex const tile(_mmap_async_index / 64, _mmap_async_index % 64);
+                if (selected_tiles->at(_mmap_async_index) && world->mapIndex.hasTile(tile))
+                    break;
+                _mmap_async_index++;
+            }
+
             if (_mmap_async_index < 4096 && static_cast<int>(_mmap_render_index) < progress->maximum())
             {
-                if (selected_tiles->at(_mmap_async_index))
-                {
-                    save();
-                }
+                TileIndex const tile(_mmap_async_index / 64, _mmap_async_index % 64);
+                save(tile);
                 _mmap_async_index++;
             }
             else
@@ -292,12 +325,19 @@ namespace Noggit
 
     void MinimapTool::finishSaving(QProgressBar* progress, QPushButton* cancel_btn, World* world, MinimapRenderSettings* settings)
     {
-        _mmap_async_index = 0;
-        _mmap_render_index = 0;
         saving_minimap = false;
         progress->deleteLater();
         cancel_btn->deleteLater();
-        world->mapIndex.saveMinimapMD5translate();
+        bool const is_blp = settings->file_format == ".blp (DXT1)"
+            || settings->file_format == ".blp (DXT5)";
+        bool const is_minimap = settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES
+            && settings->export_mode != MinimapGenMode::LOD_MAPTEXTURES_N;
+
+        if (is_blp && is_minimap && _mmap_output_count
+            && !world->mapIndex.saveMinimapMD5translate())
+        {
+            _mmap_render_failed = true;
+        }
 
         // save combined minimap
         if (settings->combined_minimap)
@@ -310,12 +350,24 @@ namespace Noggit
             }
 
             QDir dir(str + "/textures/minimap/");
-            if (!dir.exists())
-                dir.mkpath(".");
-
-            _mmap_combined_image->save(dir.filePath(image_path));
+            bool const directory_ready = dir.exists() || dir.mkpath(".");
+            bool const combined_saved = directory_ready && _mmap_combined_image.has_value()
+                && _mmap_combined_image->save(dir.filePath(image_path));
+            if (!combined_saved)
+            {
+                _mmap_render_failed = true;
+                LogError << "Failed saving combined minimap image." << std::endl;
+            }
             _mmap_combined_image.reset();
         }
+
+        if (_mmap_render_failed)
+            LogError << "Minimap batch completed with one or more failures." << std::endl;
+
+        _mmap_async_index = 0;
+        _mmap_render_index = 0;
+        _mmap_output_count = 0;
+        _mmap_render_failed = false;
     }
 
     void MinimapTool::saveSettings()

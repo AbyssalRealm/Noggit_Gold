@@ -63,6 +63,7 @@ namespace OpenGL
     int draw_noeffectdoodad_overlay = false;
     int draw_only_normals = false;
     int point_normals_up = false;
+    int minimap_render = false;
     // int padding;
   };
 
